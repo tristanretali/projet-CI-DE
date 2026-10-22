@@ -41,11 +41,26 @@ EXPECTED_RECEIVED_BY_IBAN = {
 }
 
 
+def run_script(script, workdir):
+    return subprocess.run(
+        [sys.executable, str(SRC_DIR / script)],
+        cwd=workdir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.fixture(scope="module")
-def conn(tmp_path_factory):
+def workdir(tmp_path_factory):
     workdir = tmp_path_factory.mktemp("pipeline")
-    for script in ("generate_csv.py", "process.py"):
-        subprocess.run([sys.executable, str(SRC_DIR / script)], cwd=workdir, check=True)
+    run_script("generate_csv.py", workdir)
+    run_script("process.py", workdir)
+    return workdir
+
+
+@pytest.fixture(scope="module")
+def conn(workdir):
     with closing(sqlite3.connect(workdir / "transaction.db")) as connection:
         yield connection
 
@@ -90,3 +105,18 @@ def test_totals_are_consistent_with_transactions(conn):
     for table in ("sent_by_iban", "sent_by_bank", "received_by_iban"):
         (total_sum,) = conn.execute(f"SELECT SUM(total) FROM {table}").fetchone()
         assert total_sum == amount_sum
+
+
+def test_all_files_are_registered_as_processed(conn):
+    (count,) = conn.execute("SELECT COUNT(*) FROM processed_files").fetchone()
+    assert count == 3
+
+
+def test_rerunning_the_pipeline_does_not_process_files_again(workdir, conn):
+    run_script("generate_csv.py", workdir)
+    rerun = run_script("process.py", workdir)
+
+    assert "Aucun nouveau fichier" in rerun.stdout
+    assert totals(conn, "sent_by_iban", "iban") == EXPECTED_SENT_BY_IBAN
+    (count,) = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()
+    assert count == 21

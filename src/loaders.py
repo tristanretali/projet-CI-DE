@@ -1,8 +1,13 @@
 import csv
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
 from models import Transaction
+
+
+def file_sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def load_transactions(path):
