@@ -26,7 +26,7 @@ def total_received_by_iban(transactions):
 
 
 def flag_transactions(transactions, threshold=FLAG_THRESHOLD):
-    return [replace(t, flagged=t.montant > threshold) for t in transactions]
+    return [replace(t, flagged=t.montant >= threshold) for t in transactions]
 
 
 def process(transactions):
