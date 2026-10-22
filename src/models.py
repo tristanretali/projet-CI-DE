@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 
 
 @dataclass(frozen=True)
@@ -11,13 +10,13 @@ class Transaction:
     banque_source: str
     iban_destinataire: str
     pays_destinataire: str
-    montant: Decimal
+    montant: int
     flagged: bool = False
 
 
 @dataclass(frozen=True)
 class ProcessingResult:
-    sent_by_iban: dict[str, Decimal]
-    sent_by_bank: dict[str, Decimal]
-    received_by_iban: dict[str, Decimal]
+    sent_by_iban: dict[str, int]
+    sent_by_bank: dict[str, int]
+    received_by_iban: dict[str, int]
     transactions: list[Transaction]

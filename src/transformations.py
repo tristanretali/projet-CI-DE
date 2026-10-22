@@ -1,14 +1,13 @@
 from collections import defaultdict
 from dataclasses import replace
-from decimal import Decimal
 
 from models import ProcessingResult
 
-FLAG_THRESHOLD = Decimal("5000")
+FLAG_THRESHOLD = 5000
 
 
 def _sum_by(transactions, key):
-    totals = defaultdict(Decimal)
+    totals = defaultdict(int)
     for transaction in transactions:
         totals[key(transaction)] += transaction.montant
     return dict(totals)
