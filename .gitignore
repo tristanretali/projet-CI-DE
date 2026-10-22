@@ -1,6 +1,9 @@
 # Données générées par generate_csv.py
 data/
 
+# Base SQLite
+*.db
+
 # Python
 __pycache__/
 *.pyc

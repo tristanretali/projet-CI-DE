@@ -1,9 +1,13 @@
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
+from database import create_schema, insert_result
 from loaders import load_transactions
 from transformations import process
 
 DATA_DIR = Path("data")
+DB_PATH = Path("transaction.db")
 
 
 def print_result(result):
@@ -25,7 +29,12 @@ def main():
         for path in sorted(DATA_DIR.glob("*.csv"))
         for transaction in load_transactions(path)
     ]
-    print_result(process(transactions))
+    result = process(transactions)
+    print_result(result)
+
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        create_schema(conn)
+        insert_result(conn, result)
 
 
 if __name__ == "__main__":
