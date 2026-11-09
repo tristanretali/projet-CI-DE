@@ -1,0 +1,28 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Créer le cluster kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: transactions
+
+      - name: Construire l'image et déployer
+        run: ./k8s/deploy.sh
+
+      - name: Test d'architecture
+        run: ./k8s/architecture-test.sh

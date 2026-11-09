@@ -4,7 +4,7 @@ from pathlib import Path
 
 from database import create_schema, get_processed_hashes, insert_result
 from loaders import content_sha256, load_transactions
-from s3 import fetch_csv_files, get_client
+from s3 import ensure_bucket, fetch_csv_files, get_client
 from transformations import process
 
 DB_PATH = Path("transaction.db")
@@ -36,7 +36,9 @@ def find_new_files(conn, contents):
 def main():
     with closing(sqlite3.connect(DB_PATH)) as conn:
         create_schema(conn)
-        new_files = find_new_files(conn, fetch_csv_files(get_client()))
+        client = get_client()
+        ensure_bucket(client)
+        new_files = find_new_files(conn, fetch_csv_files(client))
         if not new_files:
             print("Aucun nouveau fichier à traiter")
             return
