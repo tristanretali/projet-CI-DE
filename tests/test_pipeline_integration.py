@@ -1,10 +1,15 @@
+import os
 import sqlite3
 import subprocess
 import sys
-from contextlib import closing
+import uuid
+from contextlib import closing, suppress
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import BotoCoreError, ClientError
+
+from s3 import fetch_csv_files, get_client
 
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 
@@ -41,21 +46,35 @@ EXPECTED_RECEIVED_BY_IBAN = {
 }
 
 
-def run_script(script, workdir):
-    return subprocess.run(
+def run_script(script, workdir, bucket):
+    result = subprocess.run(
         [sys.executable, str(SRC_DIR / script)],
         cwd=workdir,
-        check=True,
+        env={**os.environ, "S3_BUCKET": bucket},
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        pytest.fail(f"{script} a échoué :\n{result.stdout}\n{result.stderr}")
+    return result
 
 
 @pytest.fixture(scope="module")
-def workdir(tmp_path_factory):
+def bucket():
+    name = f"test-{uuid.uuid4().hex[:12]}"
+    yield name
+    client = get_client()
+    with suppress(BotoCoreError, ClientError):
+        for key in fetch_csv_files(client, name):
+            client.delete_object(Bucket=name, Key=key)
+        client.delete_bucket(Bucket=name)
+
+
+@pytest.fixture(scope="module")
+def workdir(tmp_path_factory, bucket):
     workdir = tmp_path_factory.mktemp("pipeline")
-    run_script("generate_csv.py", workdir)
-    run_script("process.py", workdir)
+    run_script("generate_csv.py", workdir, bucket)
+    run_script("process.py", workdir, bucket)
     return workdir
 
 
@@ -107,14 +126,27 @@ def test_totals_are_consistent_with_transactions(conn):
         assert total_sum == amount_sum
 
 
+def test_csv_files_are_stored_in_s3(bucket):
+    keys = sorted(fetch_csv_files(get_client(), bucket))
+    assert keys == [
+        "incoming/transactions_001.csv",
+        "incoming/transactions_002.csv",
+        "incoming/transactions_003.csv",
+    ]
+
+
 def test_all_files_are_registered_as_processed(conn):
-    (count,) = conn.execute("SELECT COUNT(*) FROM processed_files").fetchone()
-    assert count == 3
+    filenames = conn.execute("SELECT filename FROM processed_files ORDER BY filename")
+    assert [name for (name,) in filenames] == [
+        "incoming/transactions_001.csv",
+        "incoming/transactions_002.csv",
+        "incoming/transactions_003.csv",
+    ]
 
 
-def test_rerunning_the_pipeline_does_not_process_files_again(workdir, conn):
-    run_script("generate_csv.py", workdir)
-    rerun = run_script("process.py", workdir)
+def test_rerunning_the_pipeline_does_not_process_files_again(workdir, bucket, conn):
+    run_script("generate_csv.py", workdir, bucket)
+    rerun = run_script("process.py", workdir, bucket)
 
     assert "Aucun nouveau fichier" in rerun.stdout
     assert totals(conn, "sent_by_iban", "iban") == EXPECTED_SENT_BY_IBAN

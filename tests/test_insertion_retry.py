@@ -5,8 +5,8 @@ import pytest
 
 import database
 from database import create_schema, insert_result
-from generate_csv import generate_csv_files
-from loaders import file_sha256, load_transactions
+from generate_csv import build_csv_files
+from loaders import content_sha256, load_transactions
 from process import find_new_files
 from transformations import process
 
@@ -17,9 +17,8 @@ def no_sleep(monkeypatch):
 
 
 @pytest.fixture
-def data_dir(tmp_path):
-    generate_csv_files(tmp_path / "data")
-    return tmp_path / "data"
+def contents():
+    return {f"incoming/{name}": data for name, data in build_csv_files().items()}
 
 
 @pytest.fixture
@@ -30,10 +29,10 @@ def conn():
     connection.close()
 
 
-def batch(data_dir):
-    files = [(path.name, file_sha256(path)) for path in sorted(data_dir.glob("*.csv"))]
+def batch(contents):
+    files = [(key, content_sha256(data)) for key, data in sorted(contents.items())]
     transactions = [
-        t for path in sorted(data_dir.glob("*.csv")) for t in load_transactions(path)
+        t for _, data in sorted(contents.items()) for t in load_transactions(data)
     ]
     return process(transactions), files
 
@@ -55,8 +54,10 @@ def fail_totals_insertion(monkeypatch, times):
     monkeypatch.setattr(database, "_insert_totals", flaky)
 
 
-def test_retry_recovers_from_transient_insertion_failures(conn, data_dir, monkeypatch):
-    result, files = batch(data_dir)
+def test_retry_recovers_from_transient_insertion_failures(
+    conn, contents, monkeypatch
+):
+    result, files = batch(contents)
     fail_totals_insertion(monkeypatch, times=2)
 
     insert_result(conn, result, files)
@@ -66,8 +67,8 @@ def test_retry_recovers_from_transient_insertion_failures(conn, data_dir, monkey
     assert conn.execute("SELECT SUM(total) FROM sent_by_iban").fetchone()[0] == 55145
 
 
-def test_failed_insertion_leaves_nothing_behind(conn, data_dir, monkeypatch):
-    result, files = batch(data_dir)
+def test_failed_insertion_leaves_nothing_behind(conn, contents, monkeypatch):
+    result, files = batch(contents)
     fail_totals_insertion(monkeypatch, times=100)
 
     with pytest.raises(sqlite3.OperationalError):
@@ -76,11 +77,11 @@ def test_failed_insertion_leaves_nothing_behind(conn, data_dir, monkeypatch):
     assert count(conn, "transactions") == 0
     assert count(conn, "sent_by_iban") == 0
     assert count(conn, "processed_files") == 0
-    assert len(find_new_files(conn, data_dir)) == 3
+    assert len(find_new_files(conn, contents)) == 3
 
 
-def test_already_processed_file_is_not_inserted_again(conn, data_dir):
-    result, files = batch(data_dir)
+def test_already_processed_file_is_not_inserted_again(conn, contents):
+    result, files = batch(contents)
     insert_result(conn, result, files)
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -90,8 +91,8 @@ def test_already_processed_file_is_not_inserted_again(conn, data_dir):
     assert conn.execute("SELECT SUM(total) FROM sent_by_iban").fetchone()[0] == 55145
 
 
-def test_integrity_error_is_not_retried(conn, data_dir, monkeypatch):
-    result, files = batch(data_dir)
+def test_integrity_error_is_not_retried(conn, contents, monkeypatch):
+    result, files = batch(contents)
     insert_result(conn, result, files)
     sleeps = []
     monkeypatch.setattr(time, "sleep", sleeps.append)
@@ -102,35 +103,34 @@ def test_integrity_error_is_not_retried(conn, data_dir, monkeypatch):
     assert sleeps == []
 
 
-def test_find_new_files_ignores_files_already_processed(conn, data_dir):
-    result, files = batch(data_dir)
+def test_find_new_files_ignores_files_already_processed(conn, contents):
+    result, files = batch(contents)
     insert_result(conn, result, files)
 
-    assert find_new_files(conn, data_dir) == []
+    assert find_new_files(conn, contents) == []
 
 
-def test_find_new_files_ignores_renamed_copy_of_processed_file(conn, data_dir):
-    result, files = batch(data_dir)
+def test_find_new_files_ignores_renamed_copy_of_processed_file(conn, contents):
+    result, files = batch(contents)
     insert_result(conn, result, files)
-    first = sorted(data_dir.glob("*.csv"))[0]
-    (data_dir / "copie.csv").write_bytes(first.read_bytes())
+    contents["incoming/copie.csv"] = contents["incoming/transactions_001.csv"]
 
-    assert find_new_files(conn, data_dir) == []
+    assert find_new_files(conn, contents) == []
 
 
-def test_find_new_files_detects_new_content(conn, data_dir):
-    result, files = batch(data_dir)
+def test_find_new_files_detects_new_content(conn, contents):
+    result, files = batch(contents)
     insert_result(conn, result, files)
-    new_file = data_dir / "transactions_004.csv"
-    new_file.write_text(
-        (data_dir / "transactions_001.csv").read_text().replace("120", "121")
-    )
+    contents["incoming/transactions_004.csv"] = contents[
+        "incoming/transactions_001.csv"
+    ].replace(b"120", b"121")
 
-    assert [path.name for path, _ in find_new_files(conn, data_dir)] == [new_file.name]
+    new_files = find_new_files(conn, contents)
+
+    assert [key for key, _, _ in new_files] == ["incoming/transactions_004.csv"]
 
 
-def test_find_new_files_keeps_one_copy_of_identical_files(conn, data_dir):
-    first = sorted(data_dir.glob("*.csv"))[0]
-    (data_dir / "copie.csv").write_bytes(first.read_bytes())
+def test_find_new_files_keeps_one_copy_of_identical_files(conn, contents):
+    contents["incoming/copie.csv"] = contents["incoming/transactions_001.csv"]
 
-    assert len(find_new_files(conn, data_dir)) == 3
+    assert len(find_new_files(conn, contents)) == 3

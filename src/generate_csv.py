@@ -1,6 +1,7 @@
-import argparse
 import csv
-from pathlib import Path
+import io
+
+from s3 import BUCKET, INCOMING_PREFIX, get_client, wait_for_s3
 
 COLUMNS = [
     "datetime_transaction",
@@ -79,32 +80,24 @@ def build_rows(transactions):
     return rows
 
 
-def generate_csv_files(output_dir):
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    paths = []
+def build_csv_files():
+    files = {}
     for filename, transactions in TRANSACTIONS_BY_FILE.items():
-        path = output_dir / filename
-        with path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(COLUMNS)
-            writer.writerows(build_rows(transactions))
-        paths.append(path)
-    return paths
+        buffer = io.StringIO(newline="")
+        writer = csv.writer(buffer)
+        writer.writerow(COLUMNS)
+        writer.writerows(build_rows(transactions))
+        files[filename] = buffer.getvalue().encode("utf-8")
+    return files
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Génère des CSV de transactions financières"
-    )
-    parser.add_argument(
-        "--output-dir", default="data", help="dossier de sortie (défaut : data)"
-    )
-    args = parser.parse_args()
-
-    for path in generate_csv_files(args.output_dir):
-        print(path)
+    client = get_client()
+    wait_for_s3(client)
+    for filename, content in build_csv_files().items():
+        key = f"{INCOMING_PREFIX}{filename}"
+        client.put_object(Bucket=BUCKET, Key=key, Body=content)
+        print(f"s3://{BUCKET}/{key}")
 
 
 if __name__ == "__main__":
