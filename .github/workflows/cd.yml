@@ -16,13 +16,20 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Créer le cluster kind
+      - name: Installer kind
         uses: helm/kind-action@v1
         with:
-          cluster_name: transactions
+          install_only: true
 
-      - name: Construire l'image et déployer
-        run: ./k8s/deploy.sh
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.13.9
+
+      - name: Déployer avec OpenTofu
+        run: |
+          tofu -chdir=infra init
+          tofu -chdir=infra apply -auto-approve
 
       - name: Test d'architecture
         run: ./k8s/architecture-test.sh

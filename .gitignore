@@ -1,7 +1,8 @@
-# Base SQLite
 *.db
+.terraform/
+*.tfstate
+*.tfstate.*
 
-# Python
 __pycache__/
 *.pyc
 .venv/
