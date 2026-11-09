@@ -23,7 +23,10 @@ def connection_closed():
 
 def client_error(status):
     return ClientError(
-        {"Error": {"Code": str(status)}, "ResponseMetadata": {"HTTPStatusCode": status}},
+        {
+            "Error": {"Code": str(status)},
+            "ResponseMetadata": {"HTTPStatusCode": status},
+        },
         "HeadBucket",
     )
 

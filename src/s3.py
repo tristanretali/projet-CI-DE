@@ -3,7 +3,14 @@ import time
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    HTTPClientError,
+    IncompleteReadError,
+)
+
+from retry import retry
 
 ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "http://localhost:8333")
 ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "local-access-key")
@@ -36,6 +43,13 @@ def ensure_bucket(client, bucket=BUCKET):
         client.create_bucket(Bucket=bucket)
 
 
+def is_transient(error):
+    if isinstance(error, ClientError):
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+        return status >= 500
+    return isinstance(error, (HTTPClientError, IncompleteReadError))
+
+
 def wait_for_s3(client, bucket=BUCKET, timeout=60):
     deadline = time.monotonic() + timeout
     while True:
@@ -43,19 +57,27 @@ def wait_for_s3(client, bucket=BUCKET, timeout=60):
             ensure_bucket(client, bucket)
             return
         except (BotoCoreError, ClientError) as error:
-            response = getattr(error, "response", None) or {}
-            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
-            if 400 <= status < 500 or time.monotonic() >= deadline:
+            if not is_transient(error) or time.monotonic() >= deadline:
                 raise
             time.sleep(1)
 
 
-def fetch_csv_files(client, bucket=BUCKET):
-    contents = {}
+@retry(exceptions=(BotoCoreError, ClientError), retry_if=is_transient)
+def list_csv_keys(client, bucket):
+    keys = []
     paginator = client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=INCOMING_PREFIX):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith(".csv"):
-                contents[key] = client.get_object(Bucket=bucket, Key=key)["Body"].read()
-    return contents
+        keys.extend(obj["Key"] for obj in page.get("Contents", []))
+    return [key for key in keys if key.endswith(".csv")]
+
+
+@retry(exceptions=(BotoCoreError, ClientError), retry_if=is_transient)
+def read_object(client, bucket, key):
+    return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def fetch_csv_files(client, bucket=BUCKET):
+    return {
+        key: read_object(client, bucket, key)
+        for key in list_csv_keys(client, bucket)
+    }

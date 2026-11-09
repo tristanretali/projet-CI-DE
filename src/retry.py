@@ -3,7 +3,7 @@ import time
 from functools import wraps
 
 
-def retry(exceptions, attempts=3, delay=1.0, backoff=2.0):
+def retry(exceptions, attempts=3, delay=1.0, backoff=2.0, retry_if=None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -12,7 +12,7 @@ def retry(exceptions, attempts=3, delay=1.0, backoff=2.0):
                 try:
                     return func(*args, **kwargs)
                 except exceptions as error:
-                    if attempt == attempts:
+                    if attempt == attempts or (retry_if and not retry_if(error)):
                         raise
                     print(
                         f"Tentative {attempt}/{attempts} échouée ({error}), "
